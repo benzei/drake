@@ -191,7 +191,15 @@ tracked <- function(config){
   sort(V(config$graph)$name)
 }
 
-dependencies <- function(targets, config, reverse = FALSE){
+upstream_jobs <- function(target, graph){
+  c(
+    graph$imports[[target]][c("globals", "loadd", "readd")],
+    graph$targets[[target]][c("globals", "loadd", "readd")]
+  ) %>%
+    clean_dependency_list
+}
+  
+dependencies <- function(targets, config){
   if (!length(targets)){
     return(character(0))
   }

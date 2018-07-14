@@ -1,30 +1,25 @@
 new_priority_queue <- function(config){
-  config$graph <- config$schedule
-  targets <- V(config$graph)$name
-  if (!length(targets)){
-    return(R6_priority_queue$new())
-  }
+  targets <- c(ls(config$graph$targets), ls(config$graph$imports))
   ndeps <- lightly_parallelize(
     X = targets,
     FUN = function(target){
-      length(dependencies(targets = target, config = config))
+      length(upstream_jobs(target = target, graph = config$graph))
     },
     jobs = config$jobs_imports
   ) %>%
     unlist
-  priorities <- rep(Inf, length(targets))
-  names(priorities) <- targets
+  priority <- rep(Inf, length(targets))
   if ("priority" %in% colnames(config$plan)){
-    prioritized <- intersect(targets, config$plan$target)
-    set_priorities <- config$plan$priority
-    names(set_priorities) <- config$plan$target
-    priorities[prioritized] <- set_priorities[prioritized]
+    priority <- config$plan$priority[match(targets, config$plan$target)]
+    priority[is.na(priority)] <- Inf
   }
-  R6_priority_queue$new(
+  data <- data.frame(
     targets = targets,
     ndeps = ndeps,
-    priorities = priorities
+    priority = priority,
+    stringsAsFactors = FALSE
   )
+  R6_priority_queue$new(data)
 }
 
 # This is not actually a serious O(log n) priority queue
@@ -36,34 +31,9 @@ new_priority_queue <- function(config){
 R6_priority_queue <- R6::R6Class(
   classname = "R6_priority_queue",
   public = list(
-    data = data.frame(
-      targets = character(0),
-      ndeps = integer(0),
-      priorities = numeric(0)
-    ),
-    initialize = function(
-      targets = character(0),
-      ndeps = integer(0),
-      priorities = numeric(0)
-    ){
-      if (
-        length(targets) != length(ndeps) ||
-        length(ndeps) != length(priorities)
-      ){
-        stop(
-          "Cannot create priority queue:\nlength(targets) = ",
-          length(targets),
-          ", length(ndeps) = ", length(ndeps),
-          ", length(priorities) = ", length(priorities),
-          call. = FALSE
-        )
-      }
-      self$data <- data.frame(
-        target = targets,
-        ndeps = ndeps,
-        priority = priorities,
-        stringsAsFactors = FALSE
-      )
+    data = NULL,
+    initialize = function(data){
+      self$data <- data
       self$sort()
     },
     size = function(){

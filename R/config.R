@@ -463,11 +463,7 @@ drake_config <- function(
     graph <- build_drake_graph(plan = plan, targets = targets,
       envir = envir, verbose = verbose, jobs = jobs,
       sanitize_plan = FALSE, console_log_file = console_log_file)
-  } else {
-    graph <- prune_drake_graph(graph = graph, to = targets, jobs = jobs)
   }
-  all_targets <- intersect(igraph::V(graph)$name, plan$target)
-  all_imports <- setdiff(igraph::V(graph)$name, all_targets)
   cache_path <- force_cache_path(cache)
   lazy_load <- parse_lazy_arg(lazy_load)
   pruning_strategy <- match.arg(pruning_strategy)
@@ -513,8 +509,6 @@ drake_config <- function(
     makefile_path = makefile_path,
     console_log_file = console_log_file,
     ensure_workers = ensure_workers,
-    all_targets = all_targets,
-    all_imports = all_imports,
     garbage_collection = garbage_collection
   )
 }

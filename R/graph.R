@@ -55,87 +55,62 @@ build_drake_graph <- function(
     type = "import",
     config = config
   )
-  imports_edges <- lightly_parallelize(
-    X = seq_along(imports),
-    FUN = function(i){
-      imports_edges(name = import_names[[i]], value = imports[[i]])
+  import_deps <- lightly_parallelize(
+    X = names(imports),
+    FUN = function(name){
+      import_dependencies(imports[[name]])
     },
     jobs = jobs
   ) %>%
-    do.call(what = dplyr::bind_rows)
+    setNames(names(imports))
   console_many_targets(
     targets = plan$target,
     pattern = "connect",
     type = "target",
     config = config
   )
-  commands_deps <- lightly_parallelize(
+  command_deps <- lightly_parallelize(
     X = seq_len(nrow(plan)),
     FUN = function(i){
-      command_dependencies(command = plan$command[i])
-    },
-    jobs = jobs
-  )
-  commands_edges <- lightly_parallelize(
-    X = seq_len(nrow(plan)),
-    FUN = function(i){
-      code_deps_to_edges(target = plan$target[i], deps = commands_deps[[i]])
+      command_dependencies(plan$command[i])
     },
     jobs = jobs
   ) %>%
-    do.call(what = dplyr::bind_rows)
-  output_files <- deps_to_igraph_attr(plan, commands_deps, "file_out", jobs)
-  input_files <- deps_to_igraph_attr(
-    plan, commands_deps, c("file_in", "knitr_in"), jobs)
-  commands_edges <- connect_output_files(commands_edges, output_files)
-  graph <- dplyr::bind_rows(imports_edges, commands_edges) %>%
-    igraph::graph_from_data_frame()
-  if (length(output_files)){
-    graph <- igraph::set_vertex_attr(
-      graph = graph,
-      name = "output_files",
-      index = names(output_files),
-      value = output_files
-    )
+    setNames(plan$target)
+  exclude <- c(names(import_deps), plan$target)
+  import_leaves <- setdiff(find_leaves(import_deps, jobs), exclude)
+  target_leaves <- setdiff(find_leaves(command_deps, jobs), exclude)
+  leaves <- union(import_leaves, target_leaves)
+  for (leaf in leaves){
+    import_deps[[leaf]] <- list()
   }
-  if (length(input_files)){
-    graph <- igraph::set_vertex_attr(
-      graph = graph,
-      name = "input_files",
-      index = names(input_files),
-      value = input_files
-    )
-  }
-  prune_drake_graph(graph = graph, to = targets, jobs = jobs) %>%
-    igraph::simplify(remove.multiple = TRUE, remove.loops = TRUE)
+  list(
+    imports = list2env(import_deps, parent = emptyenv(), hash = TRUE),
+    targets = list2env(command_deps, parent = emptyenv(), hash = TRUE)
+  ) %>%
+    prune_drake_graph(jobs = jobs)
 }
 
-imports_edges <- function(name, value){
-  deps <- import_dependencies(value)
-  code_deps_to_edges(target = name, deps = deps)
-}
-
-code_deps_to_edges <- function(target, deps){
-  inputs <- clean_dependency_list(deps[setdiff(names(deps), "file_out")])
-  edges <- NULL
-  if (length(inputs)){
-    data.frame(from = inputs, to = target, stringsAsFactors = FALSE)
-  } else {
-    # Loops will be removed.
-    data.frame(from = target, to = target, stringsAsFactors = FALSE)
-  }
-}
-
-deps_to_igraph_attr <- function(plan, commands_deps, fields, jobs){
+find_leaves <- function(dep_list, jobs){
   lightly_parallelize(
-    X = seq_len(nrow(plan)),
-    FUN = function(i){
-      unlist(commands_deps[[i]][fields])
+    dep_list,
+    function(x){
+      unlist(x[c("globals", "loadd", "readd")])
     },
     jobs = jobs
   ) %>%
-    setNames(nm = plan$target) %>%
-    select_nonempty
+    clean_dependency_list 
+}
+
+unload_conflicts <- function(imports, targets, envir, verbose){
+  common <- intersect(imports, targets)
+  if (verbose & length(common)){
+    message(
+      "Unloading targets from environment:\n",
+      multiline_message(common), sep = ""
+    )
+  }
+  remove(list = common, envir = envir)
 }
 
 #' @title Prune the dependency network of your project.
@@ -172,52 +147,28 @@ deps_to_igraph_attr <- function(plan, commands_deps, fields, jobs){
 #' })
 #' }
 prune_drake_graph <- function(
-  graph, to = igraph::V(graph)$name, jobs = 1
+  graph, to = ls(graph$targets), jobs = 1
 ){
-  if (!inherits(graph, "igraph")){
-    stop(
-      "supplied graph must be an igraph object",
-      call. = FALSE
-    )
+  stage <- keep_these <- to
+  while (length(stage)){
+    stage <- lightly_parallelize(
+      X = stage,
+      FUN = upstream_jobs,
+      graph = graph,
+      jobs = jobs
+    ) %>%
+      unlist
+    keep_these <- c(keep_these, stage)
   }
-  unlisted <- setdiff(to, V(graph)$name)
-  if (length(unlisted)){
-    warning(
-      "supplied targets not in the dependency graph:\n",
-      multiline_message(unlisted),
-      call. = FALSE
-    )
-    to <- setdiff(to, unlisted)
+  remove_imports <- setdiff(ls(graph$imports), keep_these)
+  remove_targets <- setdiff(ls(graph$targets), keep_these)
+  if (length(remove_imports)){
+    remove(list = remove_imports, envir = graph$imports)
   }
-  if (!length(to)){
-    warning(
-      "cannot prune graph: no valid destination vertices supplied",
-      call. = FALSE
-    )
-    return(graph)
+  if (length(remove_targets)){
+    remove(list = remove_targets, envir = graph$targets)
   }
-  ignore <- lightly_parallelize(
-    X = to,
-    FUN = function(vertex){
-      subcomponent(graph = graph, v = vertex, mode = "in")$name
-    },
-    jobs = jobs
-  ) %>%
-    unlist() %>%
-    unique() %>%
-    setdiff(x = igraph::V(graph)$name)
-  delete_vertices(graph = graph, v = ignore)
-}
-
-unload_conflicts <- function(imports, targets, envir, verbose){
-  common <- intersect(imports, targets)
-  if (verbose & length(common)){
-    message(
-      "Unloading targets from environment:\n",
-      multiline_message(common), sep = ""
-    )
-  }
-  remove(list = common, envir = envir)
+  graph
 }
 
 get_neighborhood <- function(graph, from, mode, order){

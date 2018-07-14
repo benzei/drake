@@ -293,7 +293,7 @@ make_with_schedules <- function(config){
 #' })
 #' }
 make_imports <- function(config = drake::read_drake_config()){
-  config$schedule <- imports_graph(config = config)
+  config$queue <- new_priority_queue(config = config)
   config$jobs <- imports_setting(config$jobs)
   config$parallelism <- imports_setting(config$parallelism)
   run_parallel_backend(config = config)
@@ -338,9 +338,8 @@ make_imports <- function(config = drake::read_drake_config()){
 #' }
 make_targets <- function(config = drake::read_drake_config()){
   up_to_date <- outdated(config, do_prework = FALSE, make_imports = FALSE) %>%
-    setdiff(x = config$all_targets)
-  config$schedule <- targets_graph(config = config) %>%
-    igraph::delete_vertices(v = up_to_date)
+    setdiff(x = config$plan$target)
+  config$queue <- new_priority_queue(config = config)
   config$jobs <- targets_setting(config$jobs)
   config$parallelism <- targets_setting(config$parallelism)
   run_parallel_backend(config = config)
@@ -349,7 +348,7 @@ make_targets <- function(config = drake::read_drake_config()){
 }
 
 make_imports_targets <- function(config){
-  config$schedule <- config$graph
+  config$queue <- new_priority_queue(config = config)
   config$parallelism <- config$parallelism[1]
   config$jobs <- max(config$jobs)
   run_parallel_backend(config = config)
